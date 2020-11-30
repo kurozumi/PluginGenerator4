@@ -40,6 +40,7 @@ jobs:
         run: |
           tar cvzf $HOME/${{ github.event.repository.name }}.tar.gz ./*
           git clone  https://${GITHUB_ACTOR}:${GITHUB_TOKEN}@github.com/EC-CUBE/ec-cube.git -b ${{ matrix.eccube-versions }} --depth=1
+
       - name: Composer Install
         run : |
           cd ec-cube
