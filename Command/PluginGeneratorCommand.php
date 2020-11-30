@@ -45,7 +45,6 @@ class PluginGeneratorCommand extends PluginGenerateCommand
         $this->createTwigBlock($pluginDir, $code);
         $this->createConfigController($pluginDir, $code);
         $this->createGithubActions($pluginDir);
-        $this->createPluginTestCase($pluginDir, $code, $name);
         $this->createGitIgnore($pluginDir);
         $this->createPluginManager($pluginDir, $code);
         $this->addCopyright($pluginDir, $code);
@@ -112,12 +111,7 @@ EOL;
 
     protected function createGitIgnore($pluginDir)
     {
-        $source = <<<EOL
-*.tar.gz
-!.gitkeep
-EOL;
-
-        $this->fs->dumpFile($pluginDir . '/.gitignore', $source);
+        $this->fs->copy(__DIR__.'/../Templates/.gitignore', $pluginDir . '/.gitignore');
     }
 
     protected function createReadMe($pluginDir, $name)
@@ -138,244 +132,12 @@ EOL;
         $this->fs->dumpFile($pluginDir . '/README.md', $source);
     }
 
-    protected function createPluginTestCase($pluginDir, $code, $name)
-    {
-        $copyright = $this->getCopyright($code);
-        $source = <<<EOL
-<?php
-${copyright}
-
-namespace Plugin\\$code\Tests;
-
-
-use Eccube\Tests\Web\AbstractWebTestCase;
-use Symfony\Component\DependencyInjection\ContainerInterface;
-
-abstract class PluginTestCase extends AbstractWebTestCase
-{
-    /**
-     * @var ContainerInterface
-     */
-    protected static \$testContainer;
-
-    public function setUp()
-    {
-        parent::setUp();
-
-        \$container = self::\$kernel->getContainer();
-        static::\$testContainer = \$container->has('test.service_container') ? \$container->get('test.service_container') : \$container;
-    }
-}
-EOL;
-        $this->fs->dumpFile($pluginDir . '/Tests/PluginTestCase.php', $source);
-    }
-
     protected function createGithubActions($pluginDir)
     {
         parent::createGithubActions($pluginDir);
 
-        $versions = [
-            ["composer" => "v1", "eccube" => "['4.0', '4.1']"],
-            ["composer" => "v2", "eccube" => "['4.1']"],
-        ];
-
-        foreach ($versions as $version) {
-            $source = '
-name: CI/CD for EC-CUBE4 Plugin with Composer:' . $version['composer'] . '
-on: [workflow_dispatch, pull_request]
-
-jobs:
-  mysql:
-    name: MySQL
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        php-versions: [7.1,7.2,7.3]
-        mysql-versions: [5.5, 5.6, 5.7]
-        eccube-versions: ' . $version['eccube'] . '
-    services:
-      mysql:
-        image: mysql:${{ matrix.mysql-versions }}
-        env:
-          MYSQL_ALLOW_EMPTY_PASSWORD: false
-          MYSQL_ROOT_USER: root
-          MYSQL_ROOT_PASSWORD: root
-          MYSQL_DATABASE: eccube_db
-        ports:
-          - 3306/tcp
-        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@master
-
-      - name: Setup PHP, with composer and extensions
-        uses: shivammathur/setup-php@master #https://github.com/shivammathur/setup-php
-        with:
-          php-version: ${{ matrix.php-versions }}
-          extensions: mbstring, xml, ctype, iconv, mysql, intl
-          tools: composer:' . $version['composer'] . '
-
-      - name: Install EC-CUBE
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tar cvzf $HOME/${{ github.event.repository.name }}.tar.gz ./*
-          git clone  https://${GITHUB_ACTOR}:${GITHUB_TOKEN}@github.com/EC-CUBE/ec-cube.git -b ${{ matrix.eccube-versions }} --depth=1
-
-      - name: Composer Install
-        run : |
-          cd ec-cube
-          composer install --no-progress --no-suggest --prefer-dist --optimize-autoloader
-
-      - name: Setup EC-CUBE
-        run: |
-          cd ec-cube
-          bin/console doctrine:schema:create
-          bin/console eccube:fixtures:load
-        env:
-          DATABASE_URL: mysql://root:root@127.0.0.1:${{ job.services.mysql.ports["3306"] }}/eccube_db
-          DATABASE_SERVER_VERSION: ${{ matrix.mysql-versions }}
-
-      - name: Install Plugin
-        run: |
-          cd ec-cube
-          bin/console eccube:plugin:install --path=$HOME/${{ github.event.repository.name }}.tar.gz
-        env:
-          DATABASE_URL: mysql://root:root@127.0.0.1:${{ job.services.mysql.ports["3306"] }}/eccube_db
-          DATABASE_SERVER_VERSION: ${{ matrix.mysql-versions }}
-
-      - name: Enable Plugin
-        run: |
-          cd ec-cube
-          bin/console cache:clear --no-warmup
-          bin/console eccube:plugin:enable --code=${{ github.event.repository.name }}
-        env:
-          DATABASE_URL: mysql://root:root@127.0.0.1:${{ job.services.mysql.ports["3306"] }}/eccube_db
-          DATABASE_SERVER_VERSION: ${{ matrix.mysql-versions }}
-
-      - name: Run Tests
-        run: |
-          cd ec-cube
-          bin/phpunit app/Plugin/${{ github.event.repository.name }}/Tests
-        env:
-          DATABASE_URL: mysql://root:root@127.0.0.1:${{ job.services.mysql.ports["3306"] }}/eccube_db
-          DATABASE_SERVER_VERSION: ${{ matrix.mysql-versions }}
-
-      - name: Update Plugin
-        run: |
-          cd ec-cube
-          bin/console eccube:plugin:update ${{ github.event.repository.name }}
-        env:
-          DATABASE_URL: mysql://root:root@127.0.0.1:${{ job.services.mysql.ports["3306"] }}/eccube_db
-          DATABASE_SERVER_VERSION: ${{ matrix.mysql-versions }}
-
-      - name: Uninstall Plugin
-        run: |
-          cd ec-cube
-          bin/console eccube:plugin:uninstall --code=${{ github.event.repository.name }}
-        env:
-          DATABASE_URL: mysql://root:root@127.0.0.1:${{ job.services.mysql.ports["3306"] }}/eccube_db
-          DATABASE_SERVER_VERSION: ${{ matrix.mysql-versions }}
-
-  postgres:
-    name: PostgreSQL
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        php-versions: [7.1,7.2,7.3]
-        postgres-versions: [9.4, 10]
-        eccube-versions: ' . $version['eccube'] . '
-    services:
-      postgres:
-        image: postgres:${{ matrix.postgres-versions }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: password
-          POSTGRES_DB: eccube_db
-        ports:
-          - 5432:5432
-        # needed because the postgres container does not provide a healthcheck
-        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@master
-
-      - name: Setup PHP, with composer and extensions
-        uses: shivammathur/setup-php@master #https://github.com/shivammathur/setup-php
-        with:
-          php-version: ${{ matrix.php-versions }}
-          extensions: mbstring, xml, ctype, iconv, mysql, intl
-          tools: composer:' . $version['composer'] . '
-
-      - name: Install EC-CUBE
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tar cvzf $HOME/${{ github.event.repository.name }}.tar.gz ./*
-          git clone https://${GITHUB_ACTOR}:${GITHUB_TOKEN}@github.com/EC-CUBE/ec-cube.git -b ${{ matrix.eccube-versions }} --depth=1
-
-      - name: Composer Install
-        run : |
-          cd ec-cube
-          composer install --no-progress --no-suggest --prefer-dist --optimize-autoloader
-
-      - name: Setup EC-CUBE
-        run: |
-          cd ec-cube
-          bin/console doctrine:schema:create
-          bin/console eccube:fixtures:load
-        env:
-          DATABASE_URL: postgres://postgres:password@127.0.0.1:${{ job.services.postgres.ports["5432"] }}/eccube_db
-          DATABASE_SERVER_VERSION: ${{ matrix.postgres-versions }}
-
-      - name: Install Plugin
-        run: |
-          cd ec-cube
-          bin/console eccube:plugin:install --path=$HOME/${{ github.event.repository.name }}.tar.gz
-        env:
-          DATABASE_URL: postgres://postgres:password@127.0.0.1:${{ job.services.postgres.ports["5432"] }}/eccube_db
-          DATABASE_SERVER_VERSION: ${{ matrix.postgres-versions }}
-
-      - name: Enable Plugin
-        run: |
-          cd ec-cube
-          bin/console cache:clear --no-warmup
-          bin/console eccube:plugin:enable --code=${{ github.event.repository.name }}
-        env:
-          DATABASE_URL: postgres://postgres:password@127.0.0.1:${{ job.services.postgres.ports["5432"] }}/eccube_db
-          DATABASE_SERVER_VERSION: ${{ matrix.postgres-versions }}
-
-      - name: Run Tests
-        run: |
-          cd ec-cube
-          bin/phpunit app/Plugin/${{ github.event.repository.name }}/Tests
-        env:
-          DATABASE_URL: postgres://postgres:password@127.0.0.1:${{ job.services.postgres.ports["5432"] }}/eccube_db
-          DATABASE_SERVER_VERSION: ${{ matrix.postgres-versions }}
-
-      - name: Update Plugin
-        run: |
-          cd ec-cube
-          bin/console eccube:plugin:update ${{ github.event.repository.name }}
-        env:
-          DATABASE_URL: postgres://postgres:password@127.0.0.1:${{ job.services.postgres.ports["5432"] }}/eccube_db
-          DATABASE_SERVER_VERSION: ${{ matrix.postgres-versions }}
-
-      - name: Uninstall Plugin
-        run: |
-          cd ec-cube
-          bin/console eccube:plugin:uninstall --code=${{ github.event.repository.name }}
-        env:
-          DATABASE_URL: postgres://postgres:password@127.0.0.1:${{ job.services.postgres.ports["5432"] }}/eccube_db
-          DATABASE_SERVER_VERSION: ${{ matrix.postgres-versions }}
-';
-
-            $this->fs->dumpFile($pluginDir . '/.github/workflows/composer-' . $version['composer'] . '.yaml', $source);
-        }
+        $this->fs->copy(__DIR__.'/../Templates/composer-v1.yaml', $pluginDir . '/.github/workflows/composer-v1.yaml');
+        $this->fs->copy(__DIR__.'/../Templates/composer-v2.yaml', $pluginDir . '/.github/workflows/composer-v2.yaml');
     }
 
     protected function getCopyright($code)
